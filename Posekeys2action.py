@@ -2,7 +2,7 @@ bl_info = {
     "name": "PoseKeys2Action",
     "author": "HollandTS",
     "version": (1, 1, 0),
-    "blender": (4, 3, 2),
+    "blender": (4, 2, 2),
     "location": "3D View > Sidebar > Pose Keys to Action",
     "description": "Create a new action from selected keyframes in Pose Mode",
     "doc_url": "",
@@ -37,6 +37,16 @@ class PoseKeys2ActionPanel(bpy.types.Panel):
         layout.prop(props, "action_name", text="Action Name")
         layout.operator("pose.create_new_action", text="Create Action!")
 
+        layout.separator()
+        layout.label(text="Misc Tools")
+
+        # Misc Tools Section
+        box = layout.box()
+        box.prop(context.scene, "show_misc_tools", icon="TRIA_DOWN" if context.scene.show_misc_tools else "TRIA_RIGHT", emboss=False)
+        if context.scene.show_misc_tools:
+            box.operator("pose.remove_in_between_keys", text="Remove In-between Keys")
+            box.label(text="Removes all keyframes in between frame numbers (sometimes models from other 3d softwares add this, removing these can improve performance speed)")
+
 
 class CreateNewActionOperator(bpy.types.Operator):
     """Operator to create a new action from selected keyframes."""
@@ -67,6 +77,7 @@ class CreateNewActionOperator(bpy.types.Operator):
             return {'CANCELLED'}
 
         new_action = bpy.data.actions.new(name=new_action_name)
+        new_action.use_fake_user = True  # Enable Fake User for the new action
         obj.animation_data.action = new_action
 
         # Copy selected keyframes
@@ -98,11 +109,73 @@ class CreateNewActionOperator(bpy.types.Operator):
         return sorted(selected_frames)
 
 
+class RemoveInBetweenKeysOperator(bpy.types.Operator):
+    """Operator to remove in-between keys."""
+    bl_idname = "pose.remove_in_between_keys"
+    bl_label = "Remove In-between Keys"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        remove_in_between_keys()
+        self.report({'INFO'}, "In-between keyframes removed successfully!")
+        return {'FINISHED'}
+
+
+def remove_in_between_keys():
+    # Check for pose mode and selected bones
+    if bpy.context.mode == 'POSE' and bpy.context.object.type == 'ARMATURE':
+        for bone in bpy.context.selected_pose_bones:
+            action = bpy.context.object.animation_data.action
+            if action:
+                for fcurve in action.fcurves:
+                    if fcurve.data_path.startswith(f'pose.bones["{bone.name}"]'):
+                        # Collect keyframes to remove
+                        keyframes_to_remove = [
+                            i for i, keyframe_point in enumerate(fcurve.keyframe_points)
+                            if not keyframe_point.co[0].is_integer()
+                        ]
+                        # Remove keyframes in reverse order (to avoid index shifting)
+                        for index in sorted(keyframes_to_remove, reverse=True):
+                            try:
+                                fcurve.keyframe_points.remove(fcurve.keyframe_points[index])
+                            except RuntimeError as e:
+                                print(f"Could not remove keyframe at index {index}: {e}")
+    
+    # Check for object mode and selected objects
+    elif bpy.context.mode == 'OBJECT':
+        for obj in bpy.context.selected_objects:
+            if obj.animation_data and obj.animation_data.action:
+                action = obj.animation_data.action
+                for fcurve in action.fcurves:
+                    # Collect keyframes to remove
+                    keyframes_to_remove = [
+                        i for i, keyframe_point in enumerate(fcurve.keyframe_points)
+                        if not keyframe_point.co[0].is_integer()
+                    ]
+                    # Remove keyframes in reverse order
+                    for index in sorted(keyframes_to_remove, reverse=True):
+                        try:
+                            fcurve.keyframe_points.remove(fcurve.keyframe_points[index])
+                        except RuntimeError as e:
+                            print(f"Could not remove keyframe at index {index}: {e}")
+
+
+# Property to show/hide Misc Tools
+def register_misc_tools_property():
+    bpy.types.Scene.show_misc_tools = bpy.props.BoolProperty(
+        name="Show Misc Tools",
+        description="Show or hide the Misc Tools section",
+        default=False,
+    )
+
+
 # Registration
 def register():
     bpy.utils.register_class(PoseKeys2ActionProperties)
     bpy.utils.register_class(PoseKeys2ActionPanel)
     bpy.utils.register_class(CreateNewActionOperator)
+    bpy.utils.register_class(RemoveInBetweenKeysOperator)
+    register_misc_tools_property()
     bpy.types.Scene.pose_keys_to_action_props = bpy.props.PointerProperty(
         type=PoseKeys2ActionProperties
     )
@@ -112,7 +185,9 @@ def unregister():
     bpy.utils.unregister_class(PoseKeys2ActionProperties)
     bpy.utils.unregister_class(PoseKeys2ActionPanel)
     bpy.utils.unregister_class(CreateNewActionOperator)
+    bpy.utils.unregister_class(RemoveInBetweenKeysOperator)
     del bpy.types.Scene.pose_keys_to_action_props
+    del bpy.types.Scene.show_misc_tools
 
 
 if __name__ == "__main__":
